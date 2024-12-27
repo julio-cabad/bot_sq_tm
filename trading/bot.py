@@ -24,6 +24,8 @@ class TBot:
         self.initial_capital = 100  # USDT
         self.position_size = self.initial_capital / self.max_positions  # 20 USDT por posición
         self.leverage = 10
+        self.taker_fee = 0.0005  # 0.05% para entrada
+        self.maker_fee = 0.0004  # 0.04% para salida
         
         # Inicializar clientes para cada par
         for symbol in CRYPTOCURRENCY_LIST:
@@ -32,18 +34,27 @@ class TBot:
         print("\033[2J\033[H", end='')
         
     def calculate_pnl(self, entry_price: float, current_price: float, side: str) -> tuple:
+        position_value = self.position_size * self.leverage
+        
+        # Calcular comisiones
+        entry_fee = position_value * self.taker_fee
+        exit_fee = position_value * self.maker_fee
+        total_fees = entry_fee + exit_fee
+        
         if side == "LONG":
             pnl_percent = ((current_price - entry_price) / entry_price) * 100
-            pnl_usdt = (current_price - entry_price) * (self.position_size * self.leverage / entry_price)
+            pnl_usdt = (current_price - entry_price) * (position_value / entry_price)
         else:  # SHORT
             pnl_percent = ((entry_price - current_price) / entry_price) * 100
-            pnl_usdt = (entry_price - current_price) * (self.position_size * self.leverage / entry_price)
-        return pnl_percent * self.leverage, pnl_usdt
+            pnl_usdt = (entry_price - current_price) * (position_value / entry_price)
+        
+        # Aplicar apalancamiento y restar comisiones
+        pnl_percent = pnl_percent * self.leverage
+        pnl_usdt = pnl_usdt - total_fees
+        
+        return pnl_percent, pnl_usdt
         
     def run(self):
-        """Ejecuta el bot de trading"""
-        self.logger.info("Starting Bot")
-        
         TEMPLATE = """=== TrendMagic Bot Status === {}
 ==================================================
 Initial Capital: {:.2f} USDT | Positions: {}/{}
@@ -51,11 +62,20 @@ Initial Capital: {:.2f} USDT | Positions: {}/{}
 
 Active Positions:
 {}
+==================================================
+Total PNL: {}
 =================================================="""
+
+        # Códigos de color ANSI
+        RED = "\033[91m"
+        GREEN = "\033[92m"
+        RESET = "\033[0m"
         
         while True:
             try:
                 positions_info = []
+                total_pnl_usdt = 0
+                total_pnl_percent = 0
                 
                 # Verificar y limpiar posiciones duplicadas
                 if len(self.positions) > self.max_positions:
@@ -104,25 +124,38 @@ Active Positions:
                 positions_info.sort(key=lambda x: x['pnl_percent'], reverse=True)
                 
                 # Formatear información de posiciones
-                positions_display = ""
+                positions_display = []  # Cambiar a lista para mejor control
                 for pos in positions_info:
-                    positions_display += (
+                    color = GREEN if pos['pnl_usdt'] >= 0 else RED
+                    
+                    # Formatear cada línea de posición
+                    line = (
                         f"{pos['entry_time'].strftime('%H:%M:%S')} | "
                         f"{pos['symbol']:<8} {pos['side']:<5} | "
                         f"Entry: {pos['entry_price']:<10.2f} | "
                         f"Current: {pos['current_price']:<10.2f} | "
-                        f"PNL: {pos['pnl_percent']:>6.2f}% (${pos['pnl_usdt']:>7.2f})\n"
+                        f"PNL: {color}${pos['pnl_usdt']:>7.2f} ({pos['pnl_percent']:>6.2f}%){RESET}"
                     )
+                    positions_display.append(line)
+                    
+                    total_pnl_usdt += pos['pnl_usdt']
+                    total_pnl_percent += pos['pnl_percent']
                 
-                if not positions_info:
-                    positions_display = "No open positions\n"
+                # Unir las líneas con saltos de línea
+                positions_text = "\n".join(positions_display) if positions_display else "No open positions"
                 
+                # Formatear el total
+                color = GREEN if total_pnl_usdt >= 0 else RED
+                total_display = f"{color}${total_pnl_usdt:>7.2f} ({total_pnl_percent:>6.2f}%){RESET}"
+                
+                # Limpiar pantalla y mostrar
                 print("\033[H" + TEMPLATE.format(
                     datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                     self.initial_capital,
                     len(self.positions),
                     self.max_positions,
-                    positions_display
+                    positions_text,
+                    total_display
                 ))
                 
                 time.sleep(1)
